@@ -5,3 +5,4 @@ __pycache__/
 
 *model_zoo
 *checkpoints
+*results

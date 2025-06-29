@@ -1,168 +1,165 @@
-import torch
-from torch.utils.data import DataLoader
-from datasets import load_from_disk
-from transformers import get_linear_schedule_with_warmup
-from torch.optim import AdamW
-from model import LegalPredictionModel
-import numpy as np
-from tqdm import tqdm
-import os
 import json
+import torch
+from torch.utils.data import Dataset, DataLoader
+from transformers import AutoTokenizer, DataCollatorForSeq2Seq
+from accelerate import Accelerator
+from tqdm import tqdm
+from model import load_lora_model
+import os
 
-# 加载处理后的数据
-train_data = load_from_disk("data/train_processed")
-test_data = load_from_disk("data/test_processed")
+# 配置参数
+MODEL_PATH = "model_zoo/Qwen3-0.6B" # "model_zoo/Qwen3-8B"
+DATA_PATH = "data/train_processed_q1.json"
+LORA_RANK = 16
+BATCH_SIZE = 1  # 每GPU批大小
+GRAD_ACCUM_STEPS = 8  # 梯度累积步数
+LEARNING_RATE = 5e-5
+EPOCHS = 3
+SAVE_DIR = "./checkpoints/qwen_0.6B_full_bs_1_grac_8_lr_5e-5_epoch_3_max_8192"
+MAX_LENGTH = 5120  # 最大长度
 
-# 加载罪名映射
-with open("data/charges.json", "r", encoding="utf-8") as f:
-    charge_to_id = json.load(f)
-id_to_charge = {v: k for k, v in charge_to_id.items()}
+os.makedirs(SAVE_DIR, exist_ok=True)  # 确保保存目录存在
 
-def collate_fn(batch):
-    """自定义批处理函数"""
-    inputs = [item["input"] for item in batch]
-    charges = [item["charges"] for item in batch]
-    imprisonments = [item["imprisonments"] for item in batch]
+class FineTuneDataset(Dataset):
+    """微调数据集类（使用Qwen3对话模板）"""
+    def __init__(self, data_path, tokenizer, max_length=MAX_LENGTH):
+        with open(data_path) as f:
+            self.data = json.load(f)
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        # 定义对话模板部分（固定）
+        self.system_str = ""
+        self.user_start = "<|im_start|>user\n"
+        self.user_end = "<|im_end|>\n"
+        self.assistant_start = "<|im_start|>assistant\n<think>\n\n</think>\n"
+        self.assistant_end = "<|im_end|>"
+
+    def __len__(self):
+        return len(self.data)
     
-    # 标记化
-    tokenizer = model.tokenizer
-    inputs = tokenizer(
-        inputs,
-        padding=True,
-        truncation=True,
-        max_length=1024,
-        return_tensors="pt"
+    def __getitem__(self, idx):
+        item = self.data[idx]
+        prompt = item['prompt']
+        label = item['label']
+        
+        # 构造各部分的字符串
+        user_str = self.user_start + prompt + self.user_end
+        assistant_str = self.assistant_start + label + self.assistant_end
+        
+        user_ids = self.tokenizer(
+            user_str,
+            add_special_tokens=False,
+            return_tensors=None
+        )["input_ids"]
+        
+        assistant_ids = self.tokenizer(
+            assistant_str,
+            add_special_tokens=False,
+            return_tensors=None
+        )["input_ids"]
+        
+        # 拼接
+        input_ids = user_ids + assistant_ids
+        # 创建labels，user设置为-100，assistant部分保留
+        labels = [-100] * len(user_ids) + assistant_ids
+        
+        # 如果总长度超过最大长度，则从左侧截断（保留最后max_length个token）
+        if len(input_ids) > self.max_length:
+            print(f"Exceeding max length: {len(input_ids)} tokens, truncated")
+            input_ids = input_ids[-self.max_length:]
+            labels = labels[-self.max_length:]
+        
+        # 创建attention_mask（全1）
+        attention_mask = [1] * len(input_ids)
+        
+        # 确保长度一致
+        assert len(input_ids) == len(labels) == len(attention_mask)
+        
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels
+        }
+    
+def main():
+    # 初始化加速器 (自动处理分布式训练)
+    accelerator = Accelerator(
+        gradient_accumulation_steps=GRAD_ACCUM_STEPS,
+        mixed_precision="bf16"
     )
     
-    # 处理罪名标签
-    charge_labels = torch.zeros(len(batch), len(charge_to_id))
-    for i, charge_str in enumerate(charges):
-        defendant_charges = charge_str.split(";")
-        for j, charges_list in enumerate(defendant_charges):
-            for charge in charges_list.split(","):
-                if charge in charge_to_id:
-                    charge_labels[i, charge_to_id[charge]] = 1
+    # 加载tokenizer和模型
+    tokenizer = AutoTokenizer.from_pretrained(
+        MODEL_PATH,
+        trust_remote_code=True,
+        use_fast=True
+    )
+    # 注意：Qwen3的pad_token是<|endoftext|>，但通常不需要设置，因为对话模板中已经包含了结束符
+    # 不过，为了在padding时使用，我们设置pad_token
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     
-    # 处理刑期标签（填充为-1）
-    max_defendants = max(len(imp) for imp in imprisonments)
-    max_charges_per_def = max(max(len(terms) for terms in imp) for imp in imprisonments)
+    model = load_lora_model(MODEL_PATH, LORA_RANK)
     
-    term_labels = torch.full(
-        (len(batch), max_defendants, max_charges_per_def), 
-        -1.0, dtype=torch.float
+    # 准备数据集
+    dataset = FineTuneDataset(DATA_PATH, tokenizer)
+    data_collator = DataCollatorForSeq2Seq(
+        tokenizer=tokenizer,
+        padding="longest",
+        pad_to_multiple_of=8,
+        return_tensors="pt",
+    )
+    train_loader = DataLoader(
+        dataset,
+        batch_size=BATCH_SIZE,
+        collate_fn=data_collator,
+        shuffle=True
     )
     
-    for i, imp in enumerate(imprisonments):
-        for j, terms in enumerate(imp):
-            for k, term in enumerate(terms):
-                term_labels[i, j, k] = term
+    # 配置优化器
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=LEARNING_RATE,
+        weight_decay=0.01
+    )
     
-    return {
-        "input_ids": inputs["input_ids"],
-        "attention_mask": inputs["attention_mask"],
-        "charge_labels": charge_labels,
-        "term_labels": term_labels
-    }
-
-# 初始化模型
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model = LegalPredictionModel().to(device)
-
-# 数据加载器
-train_loader = DataLoader(
-    train_data, 
-    batch_size=4, 
-    shuffle=True,
-    collate_fn=collate_fn,
-    num_workers=4
-)
-
-val_loader = DataLoader(
-    test_data, 
-    batch_size=4, 
-    collate_fn=collate_fn,
-    num_workers=4
-)
-
-# 优化器
-optimizer = AdamW(model.parameters(), lr=1e-5)
-scheduler = get_linear_schedule_with_warmup(
-    optimizer, 
-    num_warmup_steps=100,
-    num_training_steps=len(train_loader)*10
-)
-
-# 训练循环
-def train_epoch(model, loader, optimizer, scheduler, device):
+    # 使用加速器准备对象
+    model, optimizer, train_loader = accelerator.prepare(
+        model, optimizer, train_loader
+    )
+    
+    # 训练循环
     model.train()
-    total_loss = 0
+    total_steps = len(train_loader) * EPOCHS
+    progress_bar = tqdm(range(total_steps), disable=not accelerator.is_main_process)
     
-    for batch in tqdm(loader, desc="Training"):
-        batch = {k: v.to(device) for k, v in batch.items()}
-        
-        optimizer.zero_grad()
-        outputs = model(
-            input_ids=batch["input_ids"],
-            attention_mask=batch["attention_mask"],
-            charge_labels=batch["charge_labels"],
-            term_labels=batch["term_labels"]
-        )
-        
-        loss = outputs["loss"]
-        loss.backward()
-        optimizer.step()
-        scheduler.step()
-        
-        total_loss += loss.item()
-    
-    return total_loss / len(loader)
-
-def evaluate(model, loader, device):
-    model.eval()
-    total_loss = 0
-    charge_preds = []
-    charge_labels = []
-    
-    with torch.no_grad():
-        for batch in tqdm(loader, desc="Evaluating"):
-            batch = {k: v.to(device) for k, v in batch.items()}
+    for epoch in range(EPOCHS):
+        for step, batch in enumerate(train_loader):
+            with accelerator.accumulate(model):
+                outputs = model(**batch)
+                loss = outputs.loss
+                accelerator.backward(loss)
+                
+                # 梯度裁剪
+                accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                
+                optimizer.step()
+                optimizer.zero_grad()
             
-            outputs = model(
-                input_ids=batch["input_ids"],
-                attention_mask=batch["attention_mask"],
-                charge_labels=batch["charge_labels"],
-                term_labels=batch["term_labels"]
-            )
+            progress_bar.update(1)
+            progress_bar.set_description(f"Epoch {epoch+1} | Loss: {loss.item():.4f}")
             
-            total_loss += outputs["loss"].item()
-            
-            # 收集罪名预测
-            charge_probs = torch.sigmoid(outputs["charge_logits"])
-            charge_preds.extend((charge_probs > 0.4).int().cpu().numpy())
-            charge_labels.extend(batch["charge_labels"].cpu().numpy())
+            # 每一步或每n步输出loss
+            # if accelerator.is_main_process and step % 10 == 0:  # 每10步输出一次
+            #     print(f"[Epoch {epoch+1} | Step {step}] Loss: {loss.item():.4f}")
     
-    # 计算罪名F1
-    from sklearn.metrics import f1_score
-    f1 = f1_score(charge_labels, charge_preds, average="macro")
+    # 保存模型
+    accelerator.wait_for_everyone()
+    unwrapped_model = accelerator.unwrap_model(model)
+    unwrapped_model.save_pretrained(SAVE_DIR, safe_serialization=True)
+    tokenizer.save_pretrained(SAVE_DIR)
     
-    return total_loss / len(loader), f1
-
-# 训练主循环
-best_f1 = 0
-for epoch in range(10):
-    print(f"Epoch {epoch+1}/10")
-    train_loss = train_epoch(model, train_loader, optimizer, scheduler, device)
-    val_loss, val_f1 = evaluate(model, val_loader, device)
-    
-    print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val F1: {val_f1:.4f}")
-    
-    # 保存最佳模型
-    if val_f1 > best_f1:
-        best_f1 = val_f1
-        torch.save(model.state_dict(), "best_model.pth")
-        print("Saved best model")
-    
-    # 学习率调整
-    scheduler.step(val_loss)
-
-print("Training completed!")
+    if accelerator.is_main_process:
+        print(f"训练完成! 模型已保存至 {SAVE_DIR}")
+if __name__ == "__main__":
+    main()
