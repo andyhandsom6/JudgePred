@@ -6,19 +6,18 @@ from accelerate import Accelerator
 from tqdm import tqdm
 from model import load_lora_model
 import os
+import argparse
+import random
 
 # 配置参数
 MODEL_PATH = "model_zoo/Qwen3-0.6B" # "model_zoo/Qwen3-8B"
-DATA_PATH = "data/train_processed_q1.json"
+# DATA_PATH = "data/train_processed_q1.json"
 LORA_RANK = 16
 BATCH_SIZE = 1  # 每GPU批大小
 GRAD_ACCUM_STEPS = 8  # 梯度累积步数
-LEARNING_RATE = 5e-5
-EPOCHS = 3
-SAVE_DIR = "./checkpoints/qwen_0.6B_full_bs_1_grac_8_lr_5e-5_epoch_3_max_8192"
+LEARNING_RATE = 2e-5
+EPOCHS = 5
 MAX_LENGTH = 5120  # 最大长度
-
-os.makedirs(SAVE_DIR, exist_ok=True)  # 确保保存目录存在
 
 class FineTuneDataset(Dataset):
     """微调数据集类（使用Qwen3对话模板）"""
@@ -41,6 +40,14 @@ class FineTuneDataset(Dataset):
         item = self.data[idx]
         prompt = item['prompt']
         label = item['label']
+
+        ablation = False
+        if ablation:
+            l = eval(label)
+            for people in l:
+                random.shuffle(people['judgment'])
+            label = str(l)
+            # print(label)
         
         # 构造各部分的字符串
         user_str = self.user_start + prompt + self.user_end
@@ -82,6 +89,15 @@ class FineTuneDataset(Dataset):
         }
     
 def main():
+    parser = argparse.ArgumentParser(description="Fine-tune Qwen3 model")
+    parser.add_argument("--task", type=int, default=1, help="Task identifier (default: 1)")
+    parser.add_argument("--save_path", type=str, required=True, help="Path to save the fine-tuned model")
+    args = parser.parse_args()
+    
+    DATA_PATH = f"data/train_processed_q{args.task}.json"
+    SAVE_DIR = args.save_path  # 保存路径
+    os.makedirs(SAVE_DIR, exist_ok=True)  # 确保保存目录存在
+
     # 初始化加速器 (自动处理分布式训练)
     accelerator = Accelerator(
         gradient_accumulation_steps=GRAD_ACCUM_STEPS,
@@ -153,13 +169,15 @@ def main():
             # if accelerator.is_main_process and step % 10 == 0:  # 每10步输出一次
             #     print(f"[Epoch {epoch+1} | Step {step}] Loss: {loss.item():.4f}")
     
-    # 保存模型
-    accelerator.wait_for_everyone()
-    unwrapped_model = accelerator.unwrap_model(model)
-    unwrapped_model.save_pretrained(SAVE_DIR, safe_serialization=True)
-    tokenizer.save_pretrained(SAVE_DIR)
+        # 保存模型
+        accelerator.wait_for_everyone()
+        unwrapped_model = accelerator.unwrap_model(model)
+        epoch_save_dir = os.path.join(SAVE_DIR, f"epoch_{epoch+1}")
+        unwrapped_model.save_pretrained(epoch_save_dir, safe_serialization=True)
+        tokenizer.save_pretrained(epoch_save_dir)
     
-    if accelerator.is_main_process:
-        print(f"训练完成! 模型已保存至 {SAVE_DIR}")
+        if accelerator.is_main_process:
+            print(f"Epoch {epoch+1} 结束，模型已保存至 {epoch_save_dir}")
+        
 if __name__ == "__main__":
     main()
