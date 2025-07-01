@@ -6,7 +6,7 @@ parser = argparse.ArgumentParser(description="Convert JSON results to CSV")
 parser.add_argument("--task", type=int, default=1, help="Task identifier (default: 1)")
 args = parser.parse_args()
 
-model_name = "qwen_0.6B_full_bs_1_grac_8_lr_2e-5_epoch_5_max_5120_t1/epoch_3"
+model_name = "qwen_0.6B_full_bs_1_grac_8_lr_2e-5_epoch_7_max_5120_t2_add_article_month_cloze/epoch_5"
 
 with open(f"./results/{model_name}/results.json", "r") as f:
     data = json.load(f)
@@ -32,7 +32,10 @@ with open(output_file, mode='w', newline='', encoding='utf-8') as csvfile:
                 person_accusations = [j['standard_accusation'] for j in person['judgment']]
                 record.append(','.join(person_accusations))  # 同一个人多罪名用逗号隔开
             else:
-                person_imprisonment = [j['imprisonment'] for j in person['judgment']]
+                try:
+                    person_imprisonment = [j['imprisonment'] for j in person['judgment']]
+                except:
+                    print(case_list)
                 # record.append(','.join(person_imprisonment))  # 同一个人多罪名用逗号隔开
                 record.append(person_imprisonment)
 

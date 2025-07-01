@@ -18,7 +18,7 @@ def create_prompt(example, charges, args):
     query = (
         "请根据上述案件事实，直接以json的形式给出每名被告人的罪名。"
         if args.task == 1 else
-        "请根据上述案件事实，直接以json的形式给出每名被告人的罪名和刑期（单位：月）。"
+        "请根据上述案件事实，直接以json的形式给出每名被告人的罪名和刑期（单位：月）。对于死刑、无期徒刑、拘役，刑期输出0。"
     )
 
     prompt = f"""【案件事实】

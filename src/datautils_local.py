@@ -5,8 +5,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm import tqdm
 from torch.multiprocessing import Process, set_start_method
 import math
+import random
 
-def run(rank, world_size, data, model_dir, output_path):
+def run(rank, world_size, data, model_dir, output_path, long_data_index):
     torch.cuda.set_device(rank)
 
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
@@ -19,8 +20,8 @@ def run(rank, world_size, data, model_dir, output_path):
 
     result = {}
 
-    for i in tqdm(range(rank, len(data), world_size), desc=f"GPU {rank}"):
-        item = data[i]
+    for i in tqdm(range(rank, len(long_data_index), world_size), desc=f"GPU {rank}"):
+        item = data[long_data_index[i]]
         fact = item["fact"]
         prompt = f"""
 假设你是一个法律专家。请你将以下犯罪事实压缩到**2000**字左右。要求：
@@ -55,10 +56,10 @@ def run(rank, world_size, data, model_dir, output_path):
                 index = 0
 
             content = tokenizer.decode(output_ids[index:], skip_special_tokens=True).strip("\n")
-            data[i]["fact"] = content
-        result[i] = data[i]  # 注意加上索引，方便后续还原顺序
+            data[long_data_index[i]]["fact"] = content
+        result[long_data_index[i]] = data[long_data_index[i]]  # 注意加上索引，方便后续还原顺序
 
-
+    os.makedirs(f"{output_path}/tmp", exist_ok=True)
     with open(f"{output_path}/tmp/part_{rank}.json", "w") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
@@ -68,18 +69,23 @@ def multi_gpu_run():
     world_size = torch.cuda.device_count()
     print(f"Launching with {world_size} GPUs")
 
-    with open("./data/train.jsonl") as f:
+    dataset = "train"
+    with open(f"./data/{dataset}.jsonl") as f:
         test_data = [json.loads(line) for line in f]
 
+    with open("./data/long_data_index.json") as f:
+        long_data_index = json.load(f)
+
+    random.shuffle(long_data_index)
     # test_data = test_data[:24]
 
-    model_dir = "model_zoo/Qwen3-8B"
-    output_path = f"./data/qwen_ready"
+    model_dir = "model_zoo/Qwen3-0.6B"
+    output_path = f"./data/qwen_ready_reorganize_{dataset}"
     os.makedirs(output_path, exist_ok=True)
 
     processes = []
     for rank in range(world_size):
-        p = Process(target=run, args=(rank, world_size, test_data, model_dir, output_path))
+        p = Process(target=run, args=(rank, world_size, test_data, model_dir, output_path, long_data_index))
         p.start()
         processes.append(p)
 

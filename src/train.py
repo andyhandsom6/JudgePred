@@ -16,7 +16,7 @@ LORA_RANK = 16
 BATCH_SIZE = 1  # 每GPU批大小
 GRAD_ACCUM_STEPS = 8  # 梯度累积步数
 LEARNING_RATE = 2e-5
-EPOCHS = 5
+EPOCHS = 7
 MAX_LENGTH = 5120  # 最大长度
 
 class FineTuneDataset(Dataset):
@@ -92,9 +92,11 @@ def main():
     parser = argparse.ArgumentParser(description="Fine-tune Qwen3 model")
     parser.add_argument("--task", type=int, default=1, help="Task identifier (default: 1)")
     parser.add_argument("--save_path", type=str, required=True, help="Path to save the fine-tuned model")
+    parser.add_argument("--add_article", type=bool, default=False, help="Whether there's artile in training data")
     args = parser.parse_args()
     
-    DATA_PATH = f"data/train_processed_q{args.task}.json"
+    article_str = "_month_cloze_2x" if args.add_article else ""
+    DATA_PATH = f"data/train_processed_q{args.task}{article_str}.json"
     SAVE_DIR = args.save_path  # 保存路径
     os.makedirs(SAVE_DIR, exist_ok=True)  # 确保保存目录存在
 
