@@ -6,7 +6,7 @@ parser = argparse.ArgumentParser(description="Convert JSON results to CSV")
 parser.add_argument("--task", type=int, default=1, help="Task identifier (default: 1)")
 args = parser.parse_args()
 
-model_name = "qwen_0.6B_full_bs_1_grac_8_lr_2e-5_epoch_7_max_5120_t2_add_article_month_cloze/epoch_5"
+model_name = "qwen_0.6B_full_bs_1_grac_8_lr_2e-5_epoch_5_max_5120_t2_short/epoch_3"
 
 with open(f"./results/{model_name}/results.json", "r") as f:
     data = json.load(f)

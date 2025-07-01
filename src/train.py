@@ -16,7 +16,7 @@ LORA_RANK = 16
 BATCH_SIZE = 1  # 每GPU批大小
 GRAD_ACCUM_STEPS = 8  # 梯度累积步数
 LEARNING_RATE = 2e-5
-EPOCHS = 7
+EPOCHS = 5
 MAX_LENGTH = 5120  # 最大长度
 
 class FineTuneDataset(Dataset):
@@ -96,7 +96,8 @@ def main():
     args = parser.parse_args()
     
     article_str = "_month_cloze_2x" if args.add_article else ""
-    DATA_PATH = f"data/train_processed_q{args.task}{article_str}.json"
+    # DATA_PATH = f"data/train_processed_q{args.task}{article_str}.json"
+    DATA_PATH = f"data/train_processed_q{args.task}_short.json"
     SAVE_DIR = args.save_path  # 保存路径
     os.makedirs(SAVE_DIR, exist_ok=True)  # 确保保存目录存在
 

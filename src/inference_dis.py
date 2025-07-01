@@ -60,10 +60,10 @@ def multi_gpu_run():
     world_size = torch.cuda.device_count()
     print(f"Launching with {world_size} GPUs")
 
-    with open("./data/test_processed_q2.json") as f:
+    with open("./data/test_processed_q2_short.json") as f:
         test_data = json.load(f)
 
-    model_name = "qwen_0.6B_full_bs_1_grac_8_lr_2e-5_epoch_7_max_5120_t2_add_article_month_cloze/epoch_5"
+    model_name = "qwen_0.6B_full_bs_1_grac_8_lr_2e-5_epoch_5_max_5120_t2_short/epoch_3"
     model_dir = f"./checkpoints/{model_name}"
     output_path = f"./results"
     os.makedirs(output_path, exist_ok=True)

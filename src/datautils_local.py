@@ -69,11 +69,11 @@ def multi_gpu_run():
     world_size = torch.cuda.device_count()
     print(f"Launching with {world_size} GPUs")
 
-    dataset = "train"
+    dataset = "test"
     with open(f"./data/{dataset}.jsonl") as f:
         test_data = [json.loads(line) for line in f]
 
-    with open("./data/long_data_index.json") as f:
+    with open("./data/test_data_tmp_idx.json") as f:
         long_data_index = json.load(f)
 
     random.shuffle(long_data_index)

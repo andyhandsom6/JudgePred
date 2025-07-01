@@ -43,7 +43,8 @@ def parse_label(example, args):
 def preprocess_data(data_path, charges_path, args):
     """预处理数据"""
     with open(data_path, 'r', encoding='utf-8') as f:
-        data = [json.loads(line) for line in f]
+        # data = [json.loads(line) for line in f]
+        data = json.load(f)
     
     charges = load_charges(charges_path)
     processed = []
@@ -68,10 +69,10 @@ if __name__ == "__main__":
     parser.add_argument("--task", type=int, default=1)
     args = parser.parse_args()
 
-    train_data = preprocess_data("data/train.jsonl", "data/charges.json", args)
-    test_data = preprocess_data("data/test.jsonl", "data/charges.json", args)
+    train_data = preprocess_data("data/train_short.json", "data/charges.json", args)
+    test_data = preprocess_data("data/test_short.json", "data/charges.json", args)
     
-    with open(f"data/train_processed_q{args.task}.json", "w") as f:
+    with open(f"data/train_processed_q{args.task}_short.json", "w") as f:
         json.dump(train_data, f, ensure_ascii=False, indent=4)
-    with open(f"data/test_processed_q{args.task}.json", "w") as f:
+    with open(f"data/test_processed_q{args.task}_short.json", "w") as f:
         json.dump(test_data, f, ensure_ascii=False, indent=4)
